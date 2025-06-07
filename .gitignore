@@ -1,0 +1,23 @@
+# Ignore everything
+*
+
+# But not these files
+!.gitignore
+!readme.md
+!helpers.php
+!LICENSE
+
+# Make sure we can track files in subdirectories if needed
+!*/
+
+# But still ignore these common files/directories even if explicitly included
+.idea/
+.phpunit.result.cache
+.DS_Store
+phpunit.phar
+phpunit.xml
+.aider*
+*.log
+*.cache
+vendor/
+node_modules/

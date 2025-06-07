@@ -1,11 +1,11 @@
 <?php
 
-if (!function_exists('request')) {
+if ( ! function_exists('request')) {
     /**
      * Get the value of a request variable from $_REQUEST.
      *
-     * @param mixed $key
-     * @param mixed $default
+     * @param mixed      $key
+     * @param mixed|null $default
      *
      * @return mixed
      *
@@ -16,24 +16,32 @@ if (!function_exists('request')) {
      * $value = request(['items', 'other']); // if items is not set, $value will be ['items' => null, 'other' => null]
      * </code>
      */
-    function request($key, $default = null)
+    function request(mixed $key, mixed $default = null): mixed
     {
         if (is_array($key)) {
-            return array_map(fn($k) => request($k, $default), $key);
+            // If mapping multiple keys, retrieve each one without sanitizing here
+            $results = [];
+            foreach ($key as $k) {
+                // Use array_key_exists for explicit null check vs missing key
+                $results[$k] = array_key_exists($k, $_REQUEST) ? $_REQUEST[$k] : $default;
+            }
+
+            return $results;
+            // Or using the simpler map if default handling is sufficient:
+            // return array_map(fn($k) => request($k, $default), $key);
         }
 
-        $key = filter_var($key, FILTER_SANITIZE_STRING);
-        $value = $_REQUEST[$key] ?? $default;
-
-        return is_array($value) ? filter_var_array($value, FILTER_SANITIZE_STRING) : filter_var($value, FILTER_SANITIZE_STRING);
+        // Don't filter/sanitize here. Return raw value or default.
+        return $_REQUEST[$key] ?? $default;
     }
 }
 
-if (!function_exists('dd')) {
+if ( ! function_exists('dd')) {
     /**
      * Dump the given value and die.
      *
      * @param mixed $data
+     *
      * @return void
      *
      * @example
@@ -41,128 +49,202 @@ if (!function_exists('dd')) {
      * dd($myVariable); // Dumps the variable and stops execution
      * </code>
      */
-    function dd($data): void
+    function dd(...$data): void
     {
-        echo '<pre>';
-        var_dump($data);
-        echo '</pre>';
+        foreach ($data as $value) {
+            echo '<pre>';
+            var_dump($value);
+            echo '</pre>';
+        }
         die();
     }
 }
 
-if (!function_exists('dump')) {
+if ( ! function_exists('dump')) {
     /**
-     * Dump the given value.
+     * Dump the given values.
      *
-     * @param mixed $value The value to dump.
+     * @param mixed ...$data The values to dump.
      *
      * @return void
      *
      * @example
      * <code>
      * dump($myVariable); // Outputs the contents of $myVariable in a readable format
+     * dump($var1, $var2, $var3); // Outputs multiple variables
      * </code>
      */
-    function dump($value): void
+    function dump(...$data): void
     {
-        echo '<pre>';
-        var_dump($value);
-        echo '</pre>';
+        foreach ($data as $value) {
+            echo '<pre>';
+            var_dump($value);
+            echo '</pre>';
+        }
     }
 }
 
-if (!function_exists('env')) {
+if ( ! function_exists('env')) {
     /**
-     * Get the value of an environment variable.
+     * Get the value of an environment variable from a .env file.
      *
-     * @param string $key
-     * @param mixed $default
+     * This function reads environment variables from a .env file located in the document root.
+     * The values are cached after the first read for better performance.
      *
-     * @return mixed
+     * Usage:
+     * 1. Ensure you have a .env file in your document root.
+     *    The .env file should contain key-value pairs, each on a new line, like this:
+     *    APP_ENV=production
+     *    DB_HOST=localhost
+     *    DB_USER=root
+     *    DB_PASS=secret
      *
-     * @example
-     * <code>
-     * $appEnv = env('APP_ENV', 'production'); // Gets the value of APP_ENV or 'production' if not set
-     * </code>
+     * 2. Use the env() function to retrieve environment variables:
+     *    $appEnv = env('APP_ENV', 'production'); // Returns 'production' if APP_ENV is not set
+     *    $databaseHost = env('DB_HOST', '127.0.0.1'); // Returns '127.0.0.1' if DB_HOST is not set
+     *
+     * @param string     $key     The key of the environment variable.
+     * @param mixed|null $default The default value to return if the environment variable is not set.
+     *
+     * @return mixed The value of the environment variable or the default value.
      */
-    function env(string $key, $default = null)
+    function env(string $key, mixed $default = null): mixed
     {
         static $env = null;
 
         if ($env === null) {
             $env = [];
-            $envFilePath = server('DOCUMENT_ROOT') . '/.env';
-            if (file_exists($envFilePath)) {
-                $envFile = fopen($envFilePath, 'r');
-                while (($line = fgets($envFile)) !== false) {
-                    $line = trim($line);
-                    if ($line && $line[0] != '#') {
-                        list($name, $value) = explode('=', $line, 2);
-                        $env[$name] = $value;
-                        $_ENV[$name] = $value;
+            $envFilePath = realpath(server('DOCUMENT_ROOT') . '/.env');
+            if ($envFilePath && file_exists($envFilePath)) {
+                $envFile = @fopen($envFilePath, 'r');
+                if ($envFile) {
+                    while (($line = fgets($envFile)) !== false) {
+                        $line = trim($line);
+                        if ($line && $line[0] !== '#' && str_contains($line, '=')) {
+                            list($name, $value) = explode('=', $line, 2);
+                            $name = trim($name);
+                            $value = trim($value);
+                            $env[$name] = $value;
+                            $_ENV[$name] = $value;
+                        }
                     }
+                    fclose($envFile);
                 }
-                fclose($envFile);
             }
         }
 
-        return $env[$key] ?? $_ENV[$key] ?? $default;
+        if (isset($env[$key])) {
+            return $env[$key];
+        }
+
+        if (isset($_ENV[$key])) {
+            return $_ENV[$key];
+        }
+
+        $value = getenv($key);
+        return $value !== false ? $value : $default;
     }
 }
 
-if (!function_exists('config')) {
+if ( ! function_exists('config')) {
     /**
      * Get the value of a configuration setting.
      *
-     * @param string $key
-     * @param mixed $default
+     * This function reads configuration settings from a config.php file located in the document root.
+     * The configuration values are cached after the first read for better performance.
      *
-     * @return mixed
+     * Usage:
+     * 1. Ensure you have a config.php file in your document root.
+     *    The config.php file should return an associative array of configuration settings, like this:
+     *    <?php
+     *    return [
+     *        'database' => [
+     *            'host' => 'localhost',
+     *            'user' => 'root',
+     *            'pass' => 'secret',
+     *        ],
+     *        'app' => [
+     *            'env' => 'production',
+     *            'debug' => true,
+     *        ],
+     *    ];
      *
-     * @example
-     * <code>
-     * $dbHost = config('database.host', 'localhost'); // Gets the value of database.host or 'localhost' if not set
-     * </code>
+     * 2. Use the config() function to retrieve configuration settings:
+     *    $dbHost = config('database.host', 'localhost'); // Returns 'localhost' if database.host is not set
+     *    $appEnv = config('app.env', 'production'); // Returns 'production' if app.env is not set
+     *
+     * @param mixed|null $key     The key of the configuration setting, using dot notation for nested settings.
+     * @param mixed|null $default The default value to return if the configuration setting is not set.
+     *
+     * @return mixed The value of the configuration setting or the default value.
      */
-    function config(string $key, $default = null)
+    function config(mixed $key = null, mixed $default = null): mixed
     {
         static $config = null;
-
+        
+        // Reset mechanism for testing - use special key '__RESET__'
+        if ($key === '__RESET__') {
+            $config = null;
+            return null;
+        }
+        
+        // Initialize once from global state and config file
         if ($config === null) {
-            $configFilePath = server('DOCUMENT_ROOT') . '/config.php';
+            $config = $GLOBALS['app_config'] ?? [];
+            $configFilePath = server('DOCUMENT_ROOT', sys_get_temp_dir()) . '/config.php';
             if (file_exists($configFilePath)) {
-                $config = include $configFilePath;
+                $fileConfig = include $configFilePath;
+                $config = array_merge($config, $fileConfig ?: []);
             }
+        }
+
+        // Set mode: write-through to both static and global
+        if (is_array($key)) {
+            foreach ($key as $k => $v) {
+                data_set($config, $k, $v);
+            }
+            $GLOBALS['app_config'] = $config;
+            return null;
+        }
+
+        // Get mode: read from static cache only
+        if ($key === null) {
+            return $config;
         }
 
         return data_get($config, $key, $default);
     }
 }
 
-if (!function_exists('redirect')) {
+if ( ! function_exists('redirect')) {
     /**
      * Redirect to a specified URL.
      *
-     * @param string $url
+     * @param string $url    The URL to redirect to
+     * @param int    $status The HTTP status code (default: 302)
+     *
      * @return void
      *
      * @example
      * <code>
-     * redirect('https://example.com'); // Redirects to the specified URL
+     * redirect('https://example.com'); // Redirects with 302 status
+     * redirect('https://example.com', 301); // Permanent redirect
+     * redirect('/login', 303); // See other redirect
      * </code>
      */
-    function redirect(string $url): void
+    function redirect(string $url, int $status = 302): void
     {
-        header("Location: $url");
+        header("Location: $url", true, $status);
         exit();
     }
 }
 
-if (!function_exists('asset')) {
+if ( ! function_exists('asset')) {
     /**
      * Generate a URL for an asset.
      *
      * @param string $path
+     *
      * @return string
      *
      * @example
@@ -172,16 +254,19 @@ if (!function_exists('asset')) {
      */
     function asset(string $path): string
     {
-        return config('base_url') . '/' . trim($path, '/');
+        $baseUrl = rtrim(config('base_url', sprintf('%s://%s', server('REQUEST_SCHEME'), server('HTTP_HOST'))), '/');
+        $path = ltrim($path, '/');
+        
+        return $path ? $baseUrl . '/' . $path : $baseUrl;
     }
 }
 
-if (!function_exists('old')) {
+if ( ! function_exists('old')) {
     /**
      * Retrieve an old input value.
      *
-     * @param string $key
-     * @param mixed $default
+     * @param string     $key
+     * @param mixed|null $default
      *
      * @return mixed
      *
@@ -190,13 +275,13 @@ if (!function_exists('old')) {
      * $oldValue = old('username'); // Gets the old input value for 'username'
      * </code>
      */
-    function old(string $key, $default = null)
+    function old(string $key, mixed $default = null): mixed
     {
-        return session('old.' . $key, $default);
+        return session('_old_input.' . $key, $default);
     }
 }
 
-if (!function_exists('csrf_field')) {
+if ( ! function_exists('csrf_field')) {
     /**
      * Generate a CSRF token field.
      *
@@ -209,15 +294,17 @@ if (!function_exists('csrf_field')) {
      */
     function csrf_field(): string
     {
-        return '<input type="hidden" name="csrf_token" value="' . session('csrf_token') . '">';
+        $token = session('csrf_token', '');
+        return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
     }
 }
 
-if (!function_exists('method_field')) {
+if ( ! function_exists('method_field')) {
     /**
      * Generate a hidden input field for the HTTP method.
      *
      * @param string $method
+     *
      * @return string
      *
      * @example
@@ -227,39 +314,163 @@ if (!function_exists('method_field')) {
      */
     function method_field(string $method): string
     {
-        return '<input type="hidden" name="_method" value="' . strtoupper($method) . '">';
+        return '<input type="hidden" name="_method" value="' . htmlspecialchars(strtoupper($method), ENT_QUOTES, 'UTF-8') . '">';
     }
 }
 
-if (!function_exists('route')) {
+if ( ! function_exists('dispatch')) {
     /**
-     * Handle routing for the request.
+     * Dispatch the current HTTP request to a handler function.
+     *
+     * This function handles request dispatching by matching the HTTP method and URI to a corresponding function.
+     * It dynamically constructs the function name based on the HTTP method and the first segment of the URI path.
+     *
+     * Example Usage:
+     * 1. Define request handler functions:
+     *    - The function name should be a combination of the HTTP method and the first URI segment.
+     *      For example, for a GET request to '/user/123', the function should be named 'getUser'.
+     *
+     *    // Handles GET requests to /user/{id}
+     *    function getUser($id) {
+     *        // Handle GET request for user with ID $id
+     *        echo "Handling GET request for user with ID: $id";
+     *    }
+     *
+     *    // Handles POST requests to /user/{id}
+     *    function postUser($id) {
+     *        // Handle POST request for user with ID $id
+     *        echo "Handling POST request for user with ID: $id";
+     *    }
+     *
+     *    // Handles GET requests to / (root)
+     *    function getIndex() {
+     *        echo "Home page";
+     *    }
+     *
+     * 2. Call the dispatch() function to handle the incoming request:
+     *    dispatch(); // Matches the HTTP method and URI to the appropriate function
+     *
+     * How It Works:
+     * 1. It retrieves the HTTP method of the request (e.g., GET, POST) and the requested URI path.
+     * 2. For root path (/), it calls {method}Index function.
+     * 3. For other paths, it constructs the function name by combining the lowercase HTTP method and the capitalized URI segment.
+     * 4. All URI segments after the first are passed as separate parameters to the handler function.
+     * 5. If no matching function is found, it aborts with a 404 status code.
      *
      * @return void
      *
      * @example
      * <code>
-     * route(); // Handles the routing for the request
+     * // Define request handler functions
+     *
+     * // Handles GET requests to /
+     * function getIndex() {
+     *     echo "Home page";
+     * }
+     *
+     * // Handles GET requests to /user/{id}
+     * function getUser($id) {
+     *     echo "Handling GET request for user with ID: $id";
+     * }
+     *
+     * // Handles GET requests to /user/{id}/edit
+     * function getUser($id, $action) {
+     *     echo "Handling GET request for user $id, action: $action";
+     * }
+     *
+     * // Call the dispatch function to handle the request
+     * dispatch();
      * </code>
      */
-    function route(): void
+    function dispatch(): void
     {
         $requestedMethod = $_SERVER['REQUEST_METHOD'];
         $requestedPath = trim(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), '/');
-        [$dir, $method] = explode('/', $requestedPath) + [null, null];
-
-        $functionToCall = strtolower($requestedMethod) . ucfirst($dir);
-
-        if (function_exists($functionToCall)) {
-            call_user_func($functionToCall, $method);
-            return;
+        
+        // Handle root path
+        if (empty($requestedPath)) {
+            $functionToCall = strtolower($requestedMethod) . 'Index';
+            if (function_exists($functionToCall)) {
+                call_user_func($functionToCall);
+                return;
+            }
+        } else {
+            // Handle normal paths
+            $segments = explode('/', $requestedPath);
+            $resource = array_shift($segments);
+            $functionToCall = strtolower($requestedMethod) . ucfirst($resource);
+            
+            if (function_exists($functionToCall)) {
+                call_user_func_array($functionToCall, $segments);
+                return;
+            }
         }
 
         abort(404, "Not Found");
     }
 }
 
-if (!function_exists('auth')) {
+if ( ! function_exists('route')) {
+    /**
+     * Generate a URL for a named route.
+     *
+     * This function generates URLs based on route names and parameters.
+     * Route patterns are defined in the global $routes array.
+     *
+     * Usage:
+     * 1. Define routes in global scope or config:
+     *    $GLOBALS['routes'] = [
+     *        'home' => '/',
+     *        'user.show' => '/user/{id}',
+     *        'user.edit' => '/user/{id}/edit',
+     *        'posts.index' => '/posts',
+     *    ];
+     *
+     * 2. Generate URLs:
+     *    route('home');                           // Returns '/'
+     *    route('user.show', ['id' => 123]);       // Returns '/user/123'
+     *    route('user.edit', ['id' => 123]);       // Returns '/user/123/edit'
+     *
+     * @param string $name       The name of the route.
+     * @param array  $parameters An array of parameters to substitute in the route pattern.
+     *
+     * @return string The generated URL.
+     * @throws InvalidArgumentException If the route name is not found.
+     *
+     * @example
+     * <code>
+     * // Define routes
+     * $GLOBALS['routes'] = [
+     *     'home' => '/',
+     *     'user.show' => '/user/{id}',
+     *     'user.edit' => '/user/{id}/edit',
+     * ];
+     *
+     * echo route('home');                           // Returns '/'
+     * echo route('user.show', ['id' => 123]);       // Returns '/user/123'
+     * echo route('user.edit', ['id' => 123]);       // Returns '/user/123/edit'
+     * </code>
+     */
+    function route(string $name, array $parameters = []): string
+    {
+        $routes = $GLOBALS['routes'] ?? [];
+        
+        if (!isset($routes[$name])) {
+            throw new InvalidArgumentException("Route [{$name}] not found.");
+        }
+        
+        $pattern = $routes[$name];
+        
+        // Replace {parameter} placeholders with actual values
+        foreach ($parameters as $key => $value) {
+            $pattern = str_replace('{' . $key . '}', urlencode((string)$value), $pattern);
+        }
+        
+        return $pattern;
+    }
+}
+
+if ( ! function_exists('auth')) {
     /**
      * Get the authenticated user.
      *
@@ -270,18 +481,19 @@ if (!function_exists('auth')) {
      * $user = auth(); // Gets the authenticated user
      * </code>
      */
-    function auth()
+    function auth(): mixed
     {
         return session('user');
     }
 }
 
-if (!function_exists('abort')) {
+if ( ! function_exists('abort')) {
     /**
      * Abort the request with a specified status code and message.
      *
-     * @param int $code
+     * @param int    $code
      * @param string $message
+     *
      * @return void
      *
      * @example
@@ -292,27 +504,26 @@ if (!function_exists('abort')) {
     function abort(int $code, string $message = ''): void
     {
         http_response_code($code);
-        echo $message;
+        echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
         exit();
     }
 }
 
-if (!function_exists('session')) {
+if ( ! function_exists('session')) {
     /**
      * Get or set session values.
      *
-     * @param mixed $key
-     * @param mixed $default
-     * @return mixed
+     * @param mixed|null $key
+     * @param mixed|null $default
      *
-     * @example
-     * <code>
-     * $value = session('key'); // Gets the session value for 'key'
-     * session(['key' => 'value']); // Sets the session value for 'key'
-     * </code>
+     * @return mixed
      */
-    function session($key = null, $default = null)
+    function session(mixed $key = null, mixed $default = null): mixed
     {
+        if (session_status() == PHP_SESSION_NONE) {
+            session_start();
+        }
+
         if (is_null($key)) {
             return $_SESSION;
         }
@@ -321,19 +532,21 @@ if (!function_exists('session')) {
             foreach ($key as $sessionKey => $sessionValue) {
                 $_SESSION[$sessionKey] = $sessionValue;
             }
+
             return null;
         }
 
-        return $_SESSION[$key] ?? $default;
+        return data_get($_SESSION, $key, $default);
     }
 }
 
-if (!function_exists('server')) {
+if ( ! function_exists('server')) {
     /**
      * Get a value from the $_SERVER superglobal.
      *
-     * @param string $key
-     * @param mixed $default
+     * @param string     $key
+     * @param mixed|null $default
+     *
      * @return mixed
      *
      * @example
@@ -341,19 +554,20 @@ if (!function_exists('server')) {
      * $host = server('HTTP_HOST'); // Gets the value of HTTP_HOST from the $_SERVER superglobal
      * </code>
      */
-    function server(string $key, $default = null)
+    function server(string $key, mixed $default = null): mixed
     {
         return $_SERVER[$key] ?? $default;
     }
 }
 
-if (!function_exists('data_get')) {
+if ( ! function_exists('data_get')) {
     /**
      * Get a value from an array or object using dot notation.
      *
-     * @param mixed $target
-     * @param string|array $key
-     * @param mixed $default
+     * @param mixed        $target
+     * @param array|string $key
+     * @param mixed|null   $default
+     *
      * @return mixed
      *
      * @example
@@ -361,29 +575,29 @@ if (!function_exists('data_get')) {
      * $value = data_get($array, 'key'); // Gets the value of 'key' from the array
      * </code>
      */
-    function data_get($target, $key, $default = null)
+    function data_get(mixed $target, array|string $key, mixed $default = null): mixed
     {
-        if (is_null($key)) {
+        $key = is_array($key) ? $key : explode('.', $key);
+
+        if (empty($key)) {
             return $target;
         }
 
-        $key = is_array($key) ? $key : explode('.', $key);
-
         foreach ($key as $segment) {
             if (is_array($target)) {
-                if (!array_key_exists($segment, $target)) {
+                if ( ! array_key_exists($segment, $target)) {
                     return value($default);
                 }
 
                 $target = $target[$segment];
             } elseif ($target instanceof ArrayAccess) {
-                if (!isset($target[$segment])) {
+                if ( ! $target->offsetExists($segment)) {
                     return value($default);
                 }
 
                 $target = $target[$segment];
             } elseif (is_object($target)) {
-                if (!isset($target->{$segment})) {
+                if ( ! property_exists($target, $segment) && ! isset($target->{$segment})) {
                     return value($default);
                 }
 
@@ -397,11 +611,12 @@ if (!function_exists('data_get')) {
     }
 }
 
-if (!function_exists('value')) {
+if ( ! function_exists('value')) {
     /**
      * Return the default value of the given value.
      *
      * @param mixed $value
+     *
      * @return mixed
      *
      * @example
@@ -409,31 +624,57 @@ if (!function_exists('value')) {
      * $default = value($someValue); // Returns the default value of $someValue
      * </code>
      */
-    function value($value)
+    function value(mixed $value): mixed
     {
         return $value instanceof Closure ? $value() : $value;
     }
 }
 
-if (!function_exists('cache')) {
+if ( ! function_exists('cache')) {
     /**
      * Simple cache helper function to store and retrieve data from a file-based cache.
      *
-     * @param string|null $key The cache key.
-     * @param mixed|null $value The value to cache. If null, the function will return the cached value.
-     * @param int $seconds The number of seconds to cache the value. Default is 3600 seconds (1 hour).
+     * This function allows you to cache data using a key-value system and retrieve it later.
+     * The cache is stored in files within a specified directory.
+     *
+     * Usage:
+     * 1. Ensure the cache directory exists or can be created by the function.
+     *    By default, the cache directory is '/cache' within the document root.
+     *    The function will attempt to create this directory if it does not exist.
+     *
+     * 2. Store data in the cache:
+     *    cache('my_key', 'my_value', 1800); // Caches 'my_value' under 'my_key' for 1800 seconds (30 minutes)
+     *
+     * 3. Retrieve data from the cache:
+     *    $value = cache('my_key'); // Retrieves the cached value for 'my_key'
+     *
+     * 4. If the cached value has expired or does not exist, null is returned.
+     *
+     * Directory Permissions:
+     * - The cache directory must be writable by the web server.
+     * - The function attempts to create the directory with 0777 permissions if it does not exist.
+     *
+     * @param mixed|null $key     The cache key. Use null to return the cache directory path.
+     * @param mixed|null $value   The value to cache. If null, the function will return the cached value.
+     * @param int|null   $seconds The number of seconds to cache the value. Default is 3600 seconds (1 hour).
      *
      * @return mixed|null The cached value, or null if not found or expired.
      *
      * @example
      * <code>
+     * // Caching a value
      * cache('my_key', 'my_value', 1800); // Cache 'my_value' for 1800 seconds (30 minutes)
-     * $value = cache('my_key'); // Retrieve the cached value
+     *
+     * // Retrieving a cached value
+     * $value = cache('my_key'); // Retrieve the cached value for 'my_key'
+     *
+     * // Retrieving the cache directory path
+     * $cacheDirectory = cache(); // Returns the path to the cache directory
      * </code>
      */
-    function cache($key = null, $value = null, int $seconds = 3600)
+    function cache(mixed $key = null, mixed $value = null, int $seconds = null): mixed
     {
-        $cacheDir = server('DOCUMENT_ROOT') . '/cache';
+        $cacheDir = $_SERVER['DOCUMENT_ROOT'] . '/cache';
 
         if (!file_exists($cacheDir)) {
             mkdir($cacheDir, 0777, true);
@@ -445,28 +686,44 @@ if (!function_exists('cache')) {
 
         $filePath = $cacheDir . '/' . md5($key) . '.cache';
 
+        // Get mode: retrieve cached value
         if (is_null($value)) {
-            if (file_exists($filePath) && (filemtime($filePath) + $seconds) > time()) {
-                return unserialize(file_get_contents($filePath));
+            $content = @file_get_contents($filePath);
+            if ($content === false) {
+                return null;
             }
 
-            return null;
+            $cachedData = @json_decode($content, true);
+            if (!$cachedData || !isset($cachedData['timestamp'], $cachedData['seconds'], $cachedData['value'])) {
+                return null;
+            }
+
+            if ((time() - $cachedData['timestamp']) >= $cachedData['seconds']) {
+                @unlink($filePath); // Clean up expired cache
+                return null;
+            }
+
+            return $cachedData['value'];
         }
 
-        file_put_contents($filePath, serialize($value));
+        // Set mode: store value in cache
+        $seconds = $seconds ?? 3600;
+        $data = json_encode(['value' => $value, 'timestamp' => time(), 'seconds' => $seconds]);
+        file_put_contents($filePath, $data, LOCK_EX);
 
         return $value;
     }
 }
 
-if (!function_exists('data_set')) {
+if ( ! function_exists('data_set')) {
     /**
      * Set a value within an array or object using dot notation.
      *
-     * @param mixed $target
-     * @param string|array $key
-     * @param mixed $value
-     * @param bool $overwrite
+     * @param mixed        $target
+     * @param array|string $key
+     * @param mixed        $value
+     * @param bool         $overwrite
+     *
      * @return mixed
      *
      * @example
@@ -474,109 +731,204 @@ if (!function_exists('data_set')) {
      * data_set($array, 'key', 'value'); // Sets the value of 'key' in the array
      * </code>
      */
-    function data_set(&$target, $key, $value, bool $overwrite = true)
+    function data_set(mixed &$target, array|string $key, mixed $value, bool $overwrite = true): mixed
     {
-        if (is_null($key)) {
-            return $target = $value;
+        $segments = is_array($key) ? $key : explode('.', $key);
+        
+        // Handle empty key
+        if (empty($segments) || (count($segments) === 1 && $segments[0] === '')) {
+            return $target;
         }
 
-        $segments = is_array($key) ? $key : explode('.', $key);
+        // Store original reference for return
+        $original = &$target;
+        
+        // Convert non-array/object to array at the start
+        if (!is_array($target) && !is_object($target)) {
+            $target = [];
+        }
 
         foreach ($segments as $i => $segment) {
             unset($segments[$i]);
 
             if (is_array($target)) {
                 if (count($segments)) {
-                    if (!array_key_exists($segment, $target)) {
+                    if ( ! array_key_exists($segment, $target)) {
                         $target[$segment] = [];
                     }
 
                     $target = &$target[$segment];
                 } else {
-                    if ($overwrite || !isset($target[$segment])) {
+                    if ($overwrite || ! isset($target[$segment])) {
                         $target[$segment] = $value;
                     }
                 }
             } elseif (is_object($target)) {
                 if (count($segments)) {
-                    if (!isset($target->{$segment})) {
-                        $target->{$segment} = [];
+                    if ( ! isset($target->{$segment})) {
+                        $target->{$segment} = new stdClass();
                     }
 
                     $target = &$target->{$segment};
                 } else {
-                    if ($overwrite || !isset($target->{$segment})) {
+                    if ($overwrite || ! isset($target->{$segment})) {
                         $target->{$segment} = $value;
                     }
                 }
-            } else {
-                $target = [];
             }
         }
 
-        return $target;
+        return $original;
     }
 }
 
-if (!function_exists('encrypt')) {
+if ( ! function_exists('encrypt')) {
     /**
      * Encrypt the given value.
      *
-     * @param mixed $value The value to encrypt.
-     * @param bool $serialize Whether to serialize the value before encryption. Default is true.
+     * This function encrypts a given value using AES-256-CBC encryption.
+     * The encrypted value is base64 encoded for safe storage and transmission.
+     * The encryption key is retrieved from the environment variables.
      *
-     * @return string The encrypted value.
+     * @param mixed $value     The value to encrypt.
+     * @param bool  $serialize Whether to serialize the value before encryption. Default is true.
      *
+     * @return string The encrypted value, base64 encoded.
+     *
+     * @throws Exception If the encryption key is not set or encryption fails.
      * @example
      * <code>
      * $encrypted = encrypt('my_secret_value'); // Returns the encrypted string
      * </code>
+     *
+     * Usage:
+     * 1. Ensure the APP_KEY is set in your environment variables (e.g., in the .env file).
+     * 2. Use the encrypt() function to encrypt any value.
+     *    Example: $encryptedValue = encrypt('my_secret_value');
+     *
      */
-    function encrypt($value, bool $serialize = true): string
+    function encrypt(mixed $value, bool $serialize = true): string
     {
-        $key = env('app_key');
-        $iv = random_bytes(16);
+        $key = env('APP_KEY');
+        if (empty($key)) {
+            throw new Exception("Encryption key not set.");
+        }
 
+        // Handle base64 encoded keys (Laravel-style)
+        if (strpos($key, 'base64:') === 0) {
+            $key = base64_decode(substr($key, 7));
+        }
+
+        // Validate key length (32 bytes for AES-256)
+        if (strlen($key) < 32) {
+            throw new Exception("Encryption key must be at least 32 bytes.");
+        }
+
+        // Use HKDF for proper key derivation
+        $salt = 'encryption-salt';
+        $authKey = hash_hkdf('sha256', $key, 32, 'auth-key', $salt);
+        $encKey = hash_hkdf('sha256', $key, 32, 'enc-key', $salt);
+
+        $iv = random_bytes(openssl_cipher_iv_length('AES-256-CBC'));
         $value = $serialize ? serialize($value) : $value;
-        $encrypted = openssl_encrypt($value, 'AES-256-CBC', $key, 0, $iv);
+        $encrypted = openssl_encrypt($value, 'AES-256-CBC', $encKey, OPENSSL_RAW_DATA, $iv);
 
-        return base64_encode($iv . $encrypted);
+        if ($encrypted === false) {
+            throw new Exception("Encryption failed.");
+        }
+
+        $mac = hash_hmac('sha256', $iv . $encrypted, $authKey, true);
+
+        // Combine IV, MAC, and Ciphertext. Base64 encode the whole payload.
+        return base64_encode($iv . $mac . $encrypted);
     }
 }
 
-if (!function_exists('decrypt')) {
+if ( ! function_exists('decrypt')) {
     /**
      * Decrypt the given value.
      *
-     * @param string $value The value to decrypt.
-     * @param bool $unserialize Whether to unserialize the value after decryption. Default is true.
+     * This function decrypts a given encrypted value that was encrypted using AES-256-CBC.
+     * The input value should be a base64 encoded string.
+     * The encryption key is retrieved from the environment variables.
+     *
+     * @param string $value       The encrypted value to decrypt, base64 encoded.
+     * @param bool   $unserialize Whether to unserialize the value after decryption. Default is true.
      *
      * @return mixed The decrypted value.
      *
+     * @throws Exception If the encryption key is not set or decryption fails.
      * @example
      * <code>
      * $decrypted = decrypt($encryptedValue); // Returns the decrypted value
      * </code>
+     *
+     * Usage:
+     * 1. Ensure the APP_KEY is set in your environment variables (e.g., in the .env file).
+     * 2. Use the decrypt() function to decrypt any value that was encrypted with encrypt().
+     *    Example: $decryptedValue = decrypt($encryptedValue);
+     *
      */
-    function decrypt(string $value, bool $unserialize = true)
+    function decrypt(string $payload, bool $unserialize = true): mixed
     {
-        $key = env('app_key');
-        $value = base64_decode($value);
-        $iv = substr($value, 0, 16);
-        $encrypted = substr($value, 16);
+        $key = env('APP_KEY');
+        if (empty($key)) {
+            throw new Exception("Encryption key not set.");
+        }
 
-        $decrypted = openssl_decrypt($encrypted, 'AES-256-CBC', $key, 0, $iv);
+        // Handle base64 encoded keys (Laravel-style)
+        if (strpos($key, 'base64:') === 0) {
+            $key = base64_decode(substr($key, 7));
+        }
+
+        // Validate key length (32 bytes for AES-256)
+        if (strlen($key) < 32) {
+            throw new Exception("Encryption key must be at least 32 bytes.");
+        }
+
+        // Use HKDF for proper key derivation (must match encrypt function)
+        $salt = 'encryption-salt';
+        $authKey = hash_hkdf('sha256', $key, 32, 'auth-key', $salt);
+        $encKey = hash_hkdf('sha256', $key, 32, 'enc-key', $salt);
+
+        $decoded = base64_decode($payload);
+        if ($decoded === false) {
+            throw new Exception("Decryption failed: Invalid payload.");
+        }
+
+        $ivLength  = openssl_cipher_iv_length('AES-256-CBC');
+        $macLength = 32; // SHA256 outputs 32 bytes
+
+        if (strlen($decoded) < $ivLength + $macLength) {
+            throw new Exception("Decryption failed: Invalid payload.");
+        }
+
+        $iv        = substr($decoded, 0, $ivLength);
+        $storedMac = substr($decoded, $ivLength, $macLength);
+        $encrypted = substr($decoded, $ivLength + $macLength);
+
+        $calculatedMac = hash_hmac('sha256', $iv . $encrypted, $authKey, true);
+
+        if ( ! hash_equals($storedMac, $calculatedMac)) {
+            throw new Exception("Decryption failed: Invalid payload.");
+        }
+
+        $decrypted = openssl_decrypt($encrypted, 'AES-256-CBC', $encKey, OPENSSL_RAW_DATA, $iv);
+
+        if ($decrypted === false) {
+            throw new Exception("Decryption failed.");
+        }
 
         return $unserialize ? unserialize($decrypted) : $decrypted;
     }
 }
 
-if (!function_exists('info')) {
+if ( ! function_exists('info')) {
     /**
      * Log an informational message.
      *
      * @param string $message The message to log.
-     * @param array $context An array of context information. Default is an empty array.
+     * @param array  $context An array of context information. Default is an empty array.
      *
      * @return void
      *
@@ -591,46 +943,85 @@ if (!function_exists('info')) {
     }
 }
 
-if (!function_exists('logger')) {
+if ( ! function_exists('logger')) {
     /**
      * Log a message.
      *
-     * @param string $level The log level (e.g., 'info', 'error').
+     * This function logs a message to a file. Each log entry includes a timestamp, log level, message, and optional context information.
+     * Logs are stored in files within a specified directory, with a new log file created for each day.
+     *
+     * Usage:
+     * 1. Ensure the logs directory exists or can be created by the function.
+     *    By default, the logs directory is '/logs' within the document root.
+     *    The function will attempt to create this directory if it does not exist.
+     *
+     * 2. Log a message:
+     *    logger('info', 'User logged in', ['user_id' => 123]); // Logs an info message with context
+     *    logger('error', 'An error occurred'); // Logs an error message
+     *
+     * Directory Permissions:
+     * - The logs directory must be writable by the web server.
+     * - The function attempts to create the directory with 0777 permissions if it does not exist.
+     *
+     * Log File Naming:
+     * - Log files are named based on the date they are created (e.g., '2024-06-01.log').
+     * - A new log file is created each day.
+     *
+     * Log Entry Format:
+     * - Each log entry includes a timestamp, log level, message, and optional context information in JSON format.
+     *
+     * @param string $level   The log level (e.g., 'info', 'error').
      * @param string $message The message to log.
-     * @param array $context An array of context information. Default is an empty array.
+     * @param array  $context An array of context information. Default is an empty array.
      *
      * @return void
      *
      * @example
      * <code>
-     * logger('info', 'User logged in', ['user_id' => 123]); // Logs the message with context
+     * // Log an informational message with context
+     * logger('info', 'User logged in', ['user_id' => 123]);
+     *
+     * // Log an error message without context
+     * logger('error', 'An error occurred');
      * </code>
      */
     function logger(string $level, string $message, array $context = []): void
     {
+        // Define the log directory within the document root
         $logDir = server('DOCUMENT_ROOT') . '/logs';
 
-        if (!file_exists($logDir)) {
+        // Ensure the log directory exists or create it with 0777 permissions
+        if ( ! file_exists($logDir)) {
             mkdir($logDir, 0777, true);
         }
 
+        // Define the log file path, creating a new log file each day
         $logFile = $logDir . '/' . date('Y-m-d') . '.log';
+
+        // Create a timestamp for the log entry
         $timestamp = date('Y-m-d H:i:s');
 
-        $contextString = json_encode($context);
-        $logMessage = "[$timestamp] $level: $message $contextString" . PHP_EOL;
+        $logMessage = sprintf(
+            "%s -- %s: %s %s",
+            $timestamp,
+            strtoupper($level),
+            $message,
+            empty($context) ? '' : json_encode($context)
+        );
+
+        $logMessage = trim($logMessage) . PHP_EOL;
 
         file_put_contents($logFile, $logMessage, FILE_APPEND);
     }
 }
 
-if (!function_exists('response')) {
+if ( ! function_exists('response')) {
     /**
      * Create an HTTP response.
      *
      * @param string $content The content of the response. Default is an empty string.
-     * @param int $status The HTTP status code. Default is 200.
-     * @param array $headers An array of headers to include in the response. Default is an empty array.
+     * @param int    $status  The HTTP status code. Default is 200.
+     * @param array  $headers An array of headers to include in the response. Default is an empty array.
      *
      * @return void
      *
@@ -651,12 +1042,12 @@ if (!function_exists('response')) {
     }
 }
 
-if (!function_exists('json_response')) {
+if ( ! function_exists('json_response')) {
     /**
      * Create a JSON HTTP response.
      *
-     * @param mixed $data The data to be encoded as JSON.
-     * @param int $status The HTTP status code. Default is 200.
+     * @param mixed $data    The data to be encoded as JSON.
+     * @param int   $status  The HTTP status code. Default is 200.
      * @param array $headers An array of headers to include in the response. Default is an empty array.
      *
      * @return void
@@ -666,45 +1057,69 @@ if (!function_exists('json_response')) {
      * json_response(['success' => true, 'message' => 'Data saved successfully'], 200); // Creates a JSON response
      * </code>
      */
-    function json_response($data, int $status = 200, array $headers = []): void
+    function json_response(mixed $data, int $status = 200, array $headers = []): void
     {
         $headers['Content-Type'] = 'application/json';
         response(json_encode($data), $status, $headers);
     }
 }
 
-if (!function_exists('storage')) {
+if ( ! function_exists('storage')) {
     /**
      * Get the storage path.
+     *
+     * This function constructs and returns the full path to a storage directory or a specified file within the storage directory.
+     * The storage directory path can be configured via a configuration setting, and if not set, defaults to a 'storage' directory within the document root.
+     *
+     * Usage:
+     * 1. Ensure the storage directory exists or can be created by the function.
+     *    By default, the storage directory is '/storage' within the document root.
+     *    The function will attempt to create this directory if it does not exist.
+     *
+     * 2. Retrieve the storage path:
+     *    $path = storage(); // Returns the path to the storage directory
+     *    $filePath = storage('uploads/myfile.txt'); // Returns the full path to 'uploads/myfile.txt' within the storage directory
+     *
+     * Directory Permissions:
+     * - The storage directory must be writable by the web server.
+     * - The function attempts to create the directory with 0777 permissions if it does not exist.
      *
      * @param string $path The relative path to append to the storage directory. Default is an empty string.
      *
      * @return string The full path to the storage directory or the specified file.
      *
+     * @throws Exception
      * @example
      * <code>
-     * $path = storage('uploads/myfile.txt'); // Returns the full path to the specified file in the storage directory
+     * // Retrieve the storage directory path
+     * $storagePath = storage(); // Returns the path to the storage directory
+     *
+     * // Retrieve the full path to a specific file within the storage directory
+     * $filePath = storage('uploads/myfile.txt'); // Returns the full path to 'uploads/myfile.txt'
      * </code>
      */
     function storage(string $path = ''): string
     {
+        // Define the storage directory path from configuration or default to '/storage' in the document root
         $storageDir = config('storage_path') ?? server('DOCUMENT_ROOT') . '/storage';
 
-        if (!file_exists($storageDir)) {
+        // Ensure the storage directory exists or create it with 0777 permissions
+        if ( ! file_exists($storageDir)) {
             mkdir($storageDir, 0777, true);
         }
 
+        // Construct the full path by combining the storage directory and the provided relative path
         return rtrim($storageDir, '/') . '/' . ltrim($path, '/');
     }
 }
 
-if (!function_exists('url')) {
+if ( ! function_exists('url')) {
     /**
      * Generate a URL.
      *
-     * @param string|null $path The path to append to the base URL. Default is null.
-     * @param array $parameters An array of query parameters to append to the URL. Default is an empty array.
-     * @param bool|null $secure Whether to use HTTPS. Default is null, which will use the current scheme.
+     * @param string|null $path       The path to append to the base URL. Default is null.
+     * @param array       $parameters An array of query parameters to append to the URL. Default is an empty array.
+     * @param bool|null   $secure     Whether to use HTTPS. Default is null, which will use the current scheme.
      *
      * @return string The generated URL.
      *
@@ -717,72 +1132,132 @@ if (!function_exists('url')) {
      */
     function url(string $path = null, array $parameters = [], ?bool $secure = null): string
     {
-        $scheme = ($secure ?? (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')) ? 'https://' : 'http://';
-        $host = $_SERVER['HTTP_HOST'];
+        $scheme  = ($secure ?? ( ! empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')) ? 'https://' : 'http://';
+        $host    = $_SERVER['HTTP_HOST'];
         $baseUrl = rtrim($scheme . $host, '/');
 
         $url = $baseUrl . '/' . ltrim($path, '/');
 
-        if (!empty($parameters)) {
+        if ( ! empty($parameters)) {
             $queryString = http_build_query($parameters);
-            $url .= '?' . $queryString;
+            $url         .= '?' . $queryString;
         }
 
         return $url;
     }
 }
 
-if (!function_exists('view')) {
+if ( ! function_exists('e')) {
+    /**
+     * Escape HTML special characters in a string.
+     *
+     * @param string|null $value The string to escape. Defaults to null, resulting in an empty string.
+     * @return string The escaped string.
+     */
+    function e(?string $value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+}
+
+if ( ! function_exists('view')) {
     /**
      * Render a view template.
      *
-     * @param string $view The name of the view template.
-     * @param array $data An array of data to pass to the view. Default is an empty array.
-     * @param array $mergeData An array of data to merge with the existing data. Default is an empty array.
+     * This function renders a PHP view template, passing an array of data to it.
+     * The view templates are expected to be PHP files located in a specified directory.
+     *
+     * Usage:
+     * 1. Ensure the views directory exists within the document root.
+     *    By default, the views directory is '/views' within the document root.
+     *
+     * 2. Create your view templates as PHP files in the views directory.
+     *    Example: Create a file named 'home.php' in the '/views' directory.
+     *
+     * 3. Call the view() function to render a template with data.
+     *    Example: view('home', ['name' => 'John']); // Renders the 'home' view with the provided data.
+     *
+     * Directory Structure:
+     * - The views directory must be readable by the web server.
+     * - View templates should be named with a '.php' extension.
+     *
+     * Data Passing:
+     * - Data is extracted as individual variables. Access directly like `$name` or via `$viewData['name']`.
+     * - Always use the `e()` helper function to escape output within the view, e.g., `<?= e($name) ?>`.
+     * - The mergeData array allows additional data to be merged with the initial data array.
+     *
+     * @param string $view      The name of the view template (relative to the views directory).
+     * @param array  $data      An array of data to pass to the view. Default is an empty array.
+     * @param array  $mergeData An array of data to merge with the existing data. Default is an empty array.
      *
      * @return void
+     * @throws RuntimeException If the view file is not found.
      *
      * @example
      * <code>
-     * view('home', ['name' => 'John']); // Renders the 'home' view with the provided data
+     * // Assuming a 'home.php' file exists in the '/views' directory
+     * // home.php: <p>Hello, <?= e($name) ?>!</p>
+     * view('home', ['name' => 'John']); // Renders the 'home' view with extracted variables
      * </code>
      */
     function view(string $view, array $data = [], array $mergeData = []): void
     {
+        // Define the views directory (Consider defining VIEW_PATH constant elsewhere)
         $viewDir = server('DOCUMENT_ROOT') . '/views';
+        // Construct the full path to the view template file
         $viewPath = rtrim($viewDir, '/') . '/' . ltrim($view, '/') . '.php';
 
-        if (!file_exists($viewPath)) {
-            abort(404, "View [$view] not found.");
+        // Check if the view file exists
+        if ( ! file_exists($viewPath)) {
+            // Throw an exception instead of using abort()
+            throw new RuntimeException("View [$view] not found at path [$viewPath].");
         }
 
+        // Merge the provided data arrays
         $data = array_merge($data, $mergeData);
 
-        extract($data);
-        include($viewPath);
+        // Create an isolated scope for the view to prevent variable leakage
+        $renderView = function($__viewPath, $__data) {
+            // Extract variables for easier access in the view
+            extract($__data, EXTR_SKIP);
+            // Also make data available as $viewData for backward compatibility
+            $viewData = $__data;
+            include($__viewPath);
+        };
+
+        // Render the view in isolated scope
+        $renderView($viewPath, $data);
     }
 }
 
-if (!function_exists('array_pluck')) {
+if ( ! function_exists('array_pluck')) {
     /**
      * Pluck an array of values from an array.
      *
-     * @param array $array The array to pluck from.
-     * @param string|array $value The value to pluck.
-     * @param string|array|null $key The key to use for the plucked values.
+     * @param array             $array The array to pluck from.
+     * @param array|string      $value The value to pluck.
+     * @param array|string|null $key   The key to use for the plucked values.
      *
      * @return array The array of plucked values.
      *
      * @example
      * <code>
      * $array = [
-     * ['name' => 'John', 'age' => 30],
-     * ['name' => 'Jane', 'age' => 25],
+     *     ['name' => 'John', 'age' => 30],
+     *     ['name' => 'Jane', 'age' => 25],
      * ];
      * $names = array_pluck($array, 'name'); // Returns ['John', 'Jane']
+     * $namesByAge = array_pluck($array, 'name', 'age'); // Returns [30 => 'John', 25 => 'Jane']
+     * 
+     * // Works with dot notation for nested values
+     * $users = [
+     *     ['user' => ['name' => 'John', 'id' => 1]],
+     *     ['user' => ['name' => 'Jane', 'id' => 2]],
+     * ];
+     * $names = array_pluck($users, 'user.name'); // Returns ['John', 'Jane']
      * </code>
      */
-    function array_pluck(array $array, $value, $key = null): array
+    function array_pluck(array $array, array|string $value, array|string $key = null): array
     {
         $results = [];
         foreach ($array as $item) {
@@ -790,7 +1265,7 @@ if (!function_exists('array_pluck')) {
             if (is_null($key)) {
                 $results[] = $itemValue;
             } else {
-                $itemKey = data_get($item, $key);
+                $itemKey           = data_get($item, $key);
                 $results[$itemKey] = $itemValue;
             }
         }
@@ -799,12 +1274,12 @@ if (!function_exists('array_pluck')) {
     }
 }
 
-if (!function_exists('array_except')) {
+if ( ! function_exists('array_except')) {
     /**
      * Get all of the given array except for a specified array of keys.
      *
-     * @param array $array The array to modify.
-     * @param array|string $keys The keys to exclude from the array.
+     * @param array        $array The array to modify.
+     * @param array|string $keys  The keys to exclude from the array.
      *
      * @return array The modified array.
      *
@@ -814,22 +1289,19 @@ if (!function_exists('array_except')) {
      * $result = array_except($array, ['age', 'location']); // Returns ['name' => 'John']
      * </code>
      */
-    function array_except(array $array, $keys): array
+    function array_except(array $array, array|string $keys): array
     {
-        foreach ((array)$keys as $key) {
-            unset($array[$key]);
-        }
-
-        return $array;
+        $keys = (array) $keys;
+        return array_diff_key($array, array_flip($keys));
     }
 }
 
-if (!function_exists('array_only')) {
+if ( ! function_exists('array_only')) {
     /**
      * Get a subset of the items from the given array.
      *
-     * @param array $array The array to get items from.
-     * @param array|string $keys The keys to get from the array.
+     * @param array        $array The array to get items from.
+     * @param array|string $keys  The keys to get from the array.
      *
      * @return array The subset of the array.
      *
@@ -839,8 +1311,30 @@ if (!function_exists('array_only')) {
      * $result = array_only($array, ['name', 'location']); // Returns ['name' => 'John', 'location' => 'NY']
      * </code>
      */
-    function array_only(array $array, $keys): array
+    function array_only(array $array, array|string $keys): array
     {
         return array_intersect_key($array, array_flip((array)$keys));
+    }
+}
+
+if ( ! function_exists('lastline')) {
+    /**
+     * Get the last line of a log file.
+     *
+     * @param string $filePath The path to the log file.
+     *
+     * @return string The last line of the log file.
+     */
+    function lastline(string $filePath): string
+    {
+        if (file_exists($filePath)) {
+            $file = new SplFileObject($filePath, 'r');
+            $file->seek(PHP_INT_MAX);
+            $file->seek($file->key() - 1);
+
+            return $file->current();
+        } else {
+            return "Log file does not exist.";
+        }
     }
 }
