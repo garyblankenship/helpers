@@ -4,7 +4,7 @@ if ( ! function_exists('request')) {
     /**
      * Get the value of a request variable from $_REQUEST.
      *
-     * @param mixed      $key
+     * @param mixed|null $key
      * @param mixed|null $default
      *
      * @return mixed
@@ -16,23 +16,22 @@ if ( ! function_exists('request')) {
      * $value = request(['items', 'other']); // if items is not set, $value will be ['items' => null, 'other' => null]
      * </code>
      */
-    function request(mixed $key, mixed $default = null): mixed
+    function request(mixed $key = null, mixed $default = null): mixed
     {
+        if ($key === null) {
+            return $_REQUEST;
+        }
+
         if (is_array($key)) {
-            // If mapping multiple keys, retrieve each one without sanitizing here
             $results = [];
             foreach ($key as $k) {
-                // Use array_key_exists for explicit null check vs missing key
-                $results[$k] = array_key_exists($k, $_REQUEST) ? $_REQUEST[$k] : $default;
+                $results[$k] = data_get($_REQUEST, $k, $default);
             }
 
             return $results;
-            // Or using the simpler map if default handling is sufficient:
-            // return array_map(fn($k) => request($k, $default), $key);
         }
 
-        // Don't filter/sanitize here. Return raw value or default.
-        return $_REQUEST[$key] ?? $default;
+        return data_get($_REQUEST, $key, $default);
     }
 }
 
@@ -254,7 +253,12 @@ if ( ! function_exists('asset')) {
      */
     function asset(string $path): string
     {
-        $baseUrl = rtrim(config('base_url', sprintf('%s://%s', server('REQUEST_SCHEME'), server('HTTP_HOST'))), '/');
+        $baseUrl = config('base_url');
+        if ($baseUrl === null) {
+            return url($path);
+        }
+
+        $baseUrl = rtrim($baseUrl, '/');
         $path = ltrim($path, '/');
         
         return $path ? $baseUrl . '/' . $path : $baseUrl;
@@ -294,8 +298,16 @@ if ( ! function_exists('csrf_field')) {
      */
     function csrf_field(): string
     {
-        $token = session('csrf_token', '');
-        return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
+        $token = session('_token');
+        if (!is_string($token) || $token === '') {
+            $legacyToken = session('csrf_token');
+            $token = is_string($legacyToken) && $legacyToken !== '' ? $legacyToken : bin2hex(random_bytes(32));
+            session(['_token' => $token, 'csrf_token' => $token]);
+        } elseif (session('csrf_token') !== $token) {
+            session(['csrf_token' => $token]);
+        }
+
+        return '<input type="hidden" name="_token" value="' . htmlspecialchars($token, ENT_QUOTES, 'UTF-8') . '">';
     }
 }
 
@@ -465,6 +477,10 @@ if ( ! function_exists('route')) {
         foreach ($parameters as $key => $value) {
             $pattern = str_replace('{' . $key . '}', urlencode((string)$value), $pattern);
         }
+
+        if (preg_match('/\{[^}]+\}/', $pattern)) {
+            throw new InvalidArgumentException("Missing route parameters for route [{$name}].");
+        }
         
         return $pattern;
     }
@@ -613,7 +629,7 @@ if ( ! function_exists('data_get')) {
 
 if ( ! function_exists('value')) {
     /**
-     * Return the default value of the given value.
+     * Return a value, resolving closures lazily.
      *
      * @param mixed $value
      *
@@ -630,6 +646,78 @@ if ( ! function_exists('value')) {
     }
 }
 
+if ( ! function_exists('once')) {
+    /**
+     * Run a callback once per key and return the cached result.
+     *
+     * @param string   $key
+     * @param callable $callback
+     *
+     * @return mixed
+     */
+    function once(string $key, callable $callback): mixed
+    {
+        static $results = [];
+
+        if (array_key_exists($key, $results)) {
+            return $results[$key];
+        }
+
+        return $results[$key] = $callback();
+    }
+}
+
+if ( ! function_exists('retry')) {
+    /**
+     * Retry a callback until it succeeds or the attempt limit is reached.
+     *
+     * @param int      $times
+     * @param callable $callback
+     * @param int      $sleepMilliseconds
+     *
+     * @return mixed
+     *
+     * @throws Throwable
+     */
+    function retry(int $times, callable $callback, int $sleepMilliseconds = 0): mixed
+    {
+        if ($times < 1) {
+            throw new InvalidArgumentException('Retry attempts must be at least 1.');
+        }
+
+        for ($attempt = 1; $attempt <= $times; $attempt++) {
+            try {
+                return $callback($attempt);
+            } catch (Throwable $exception) {
+                if ($attempt === $times) {
+                    throw $exception;
+                }
+
+                if ($sleepMilliseconds > 0) {
+                    usleep($sleepMilliseconds * 1000);
+                }
+            }
+        }
+    }
+}
+
+if ( ! function_exists('tap')) {
+    /**
+     * Pass a value to a callback, then return the original value.
+     *
+     * @param mixed    $value
+     * @param callable $callback
+     *
+     * @return mixed
+     */
+    function tap(mixed $value, callable $callback): mixed
+    {
+        $callback($value);
+
+        return $value;
+    }
+}
+
 if ( ! function_exists('cache')) {
     /**
      * Simple cache helper function to store and retrieve data from a file-based cache.
@@ -639,7 +727,7 @@ if ( ! function_exists('cache')) {
      *
      * Usage:
      * 1. Ensure the cache directory exists or can be created by the function.
-     *    By default, the cache directory is '/cache' within the document root.
+     *    By default, the cache directory is 'cache' within the storage directory.
      *    The function will attempt to create this directory if it does not exist.
      *
      * 2. Store data in the cache:
@@ -652,7 +740,7 @@ if ( ! function_exists('cache')) {
      *
      * Directory Permissions:
      * - The cache directory must be writable by the web server.
-     * - The function attempts to create the directory with 0777 permissions if it does not exist.
+     * - The function attempts to create the directory with 0755 permissions if it does not exist.
      *
      * @param mixed|null $key     The cache key. Use null to return the cache directory path.
      * @param mixed|null $value   The value to cache. If null, the function will return the cached value.
@@ -672,12 +760,12 @@ if ( ! function_exists('cache')) {
      * $cacheDirectory = cache(); // Returns the path to the cache directory
      * </code>
      */
-    function cache(mixed $key = null, mixed $value = null, int $seconds = null): mixed
+    function cache(mixed $key = null, mixed $value = null, ?int $seconds = null): mixed
     {
-        $cacheDir = $_SERVER['DOCUMENT_ROOT'] . '/cache';
+        $cacheDir = config('cache_path') ?? storage('cache');
 
         if (!file_exists($cacheDir)) {
-            mkdir($cacheDir, 0777, true);
+            mkdir($cacheDir, 0755, true);
         }
 
         if (is_null($key)) {
@@ -987,12 +1075,10 @@ if ( ! function_exists('logger')) {
      */
     function logger(string $level, string $message, array $context = []): void
     {
-        // Define the log directory within the document root
-        $logDir = server('DOCUMENT_ROOT') . '/logs';
+        $logDir = config('log_path') ?? storage('logs');
 
-        // Ensure the log directory exists or create it with 0777 permissions
         if ( ! file_exists($logDir)) {
-            mkdir($logDir, 0777, true);
+            mkdir($logDir, 0755, true);
         }
 
         // Define the log file path, creating a new log file each day
@@ -1069,11 +1155,11 @@ if ( ! function_exists('storage')) {
      * Get the storage path.
      *
      * This function constructs and returns the full path to a storage directory or a specified file within the storage directory.
-     * The storage directory path can be configured via a configuration setting, and if not set, defaults to a 'storage' directory within the document root.
+     * The storage directory path can be configured via a configuration setting, and if not set, defaults to a 'storage' directory next to the document root.
      *
      * Usage:
      * 1. Ensure the storage directory exists or can be created by the function.
-     *    By default, the storage directory is '/storage' within the document root.
+     *    By default, the storage directory is '/storage' next to the document root.
      *    The function will attempt to create this directory if it does not exist.
      *
      * 2. Retrieve the storage path:
@@ -1082,7 +1168,7 @@ if ( ! function_exists('storage')) {
      *
      * Directory Permissions:
      * - The storage directory must be writable by the web server.
-     * - The function attempts to create the directory with 0777 permissions if it does not exist.
+     * - The function attempts to create the directory with 0755 permissions if it does not exist.
      *
      * @param string $path The relative path to append to the storage directory. Default is an empty string.
      *
@@ -1100,12 +1186,12 @@ if ( ! function_exists('storage')) {
      */
     function storage(string $path = ''): string
     {
-        // Define the storage directory path from configuration or default to '/storage' in the document root
-        $storageDir = config('storage_path') ?? server('DOCUMENT_ROOT') . '/storage';
+        $documentRoot = server('DOCUMENT_ROOT');
+        $defaultStorageDir = $documentRoot ? dirname(rtrim($documentRoot, DIRECTORY_SEPARATOR)) . DIRECTORY_SEPARATOR . 'storage' : sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'storage';
+        $storageDir = config('storage_path') ?? $defaultStorageDir;
 
-        // Ensure the storage directory exists or create it with 0777 permissions
         if ( ! file_exists($storageDir)) {
-            mkdir($storageDir, 0777, true);
+            mkdir($storageDir, 0755, true);
         }
 
         // Construct the full path by combining the storage directory and the provided relative path
@@ -1130,13 +1216,14 @@ if ( ! function_exists('url')) {
      * echo url('user/profile', [], true); // Returns a secure HTTPS URL to the user profile page
      * </code>
      */
-    function url(string $path = null, array $parameters = [], ?bool $secure = null): string
+    function url(?string $path = null, array $parameters = [], ?bool $secure = null): string
     {
         $scheme  = ($secure ?? ( ! empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')) ? 'https://' : 'http://';
         $host    = $_SERVER['HTTP_HOST'];
         $baseUrl = rtrim($scheme . $host, '/');
 
-        $url = $baseUrl . '/' . ltrim($path, '/');
+        $path = $path ?? '';
+        $url = $path === '' ? $baseUrl : $baseUrl . '/' . ltrim($path, '/');
 
         if ( ! empty($parameters)) {
             $queryString = http_build_query($parameters);
@@ -1202,15 +1289,19 @@ if ( ! function_exists('view')) {
      */
     function view(string $view, array $data = [], array $mergeData = []): void
     {
-        // Define the views directory (Consider defining VIEW_PATH constant elsewhere)
         $viewDir = server('DOCUMENT_ROOT') . '/views';
-        // Construct the full path to the view template file
-        $viewPath = rtrim($viewDir, '/') . '/' . ltrim($view, '/') . '.php';
+        $basePath = realpath($viewDir);
 
-        // Check if the view file exists
-        if ( ! file_exists($viewPath)) {
-            // Throw an exception instead of using abort()
-            throw new RuntimeException("View [$view] not found at path [$viewPath].");
+        if ($basePath === false) {
+            throw new RuntimeException("View directory not found at path [$viewDir].");
+        }
+
+        $candidatePath = rtrim($basePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($view, DIRECTORY_SEPARATOR) . '.php';
+        $viewPath = realpath($candidatePath);
+        $basePrefix = rtrim($basePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+
+        if ($viewPath === false || strncmp($viewPath, $basePrefix, strlen($basePrefix)) !== 0 || ! is_file($viewPath)) {
+            throw new RuntimeException("View [$view] not found.");
         }
 
         // Merge the provided data arrays
@@ -1257,7 +1348,7 @@ if ( ! function_exists('array_pluck')) {
      * $names = array_pluck($users, 'user.name'); // Returns ['John', 'Jane']
      * </code>
      */
-    function array_pluck(array $array, array|string $value, array|string $key = null): array
+    function array_pluck(array $array, array|string $value, array|string|null $key = null): array
     {
         $results = [];
         foreach ($array as $item) {
@@ -1327,14 +1418,21 @@ if ( ! function_exists('lastline')) {
      */
     function lastline(string $filePath): string
     {
-        if (file_exists($filePath)) {
-            $file = new SplFileObject($filePath, 'r');
-            $file->seek(PHP_INT_MAX);
-            $file->seek($file->key() - 1);
-
-            return $file->current();
-        } else {
+        if ( ! file_exists($filePath)) {
             return "Log file does not exist.";
         }
+
+        if (filesize($filePath) === 0) {
+            return '';
+        }
+
+        $lastLine = '';
+        foreach (new SplFileObject($filePath, 'r') as $line) {
+            if ($line !== false && $line !== '') {
+                $lastLine = $line;
+            }
+        }
+
+        return $lastLine;
     }
 }
